@@ -262,37 +262,15 @@ def send_media_group(media_group_id):
         # Отправляем новые медиа
         if len(media_to_send) > 0:
             try:
-                sent_messages = []
-                if len(media_to_send) == 1:
-                    # Одно медиа — отправляем отдельно без текста
-                    message, file_data, file_id, file_hash, file_size = media_to_send[0]
-                    sent_msg = None
-                    if message.photo:
-                        sent_msg = bot.send_photo(TARGET_CHAT_ID, file_data)
-                    elif message.video:
-                        sent_msg = bot.send_video(TARGET_CHAT_ID, file_data)
-                    elif message.animation:
-                        sent_msg = bot.send_animation(TARGET_CHAT_ID, file_data)
-                    elif message.document:
-                        original_filename = message.document.file_name if hasattr(message.document, 'file_name') else None
-                        sent_msg = bot.send_document(TARGET_CHAT_ID, file_data,
-                                                      visible_file_name=original_filename)
-                    elif message.audio:
-                        sent_msg = bot.send_audio(TARGET_CHAT_ID, file_data)
-                    else:
-                        print(f"Неизвестный тип медиа для message_id {message.message_id}")
+                # Создаем список InputMedia для всех файлов (и для одиночных, и для альбомов)
+                input_media_list = []
+                for message, file_data, _, _, _ in media_to_send:
+                    input_media = create_input_media(message, file_data)
+                    if input_media:
+                        input_media_list.append(input_media)
 
-                    if sent_msg:
-                        sent_messages.append(sent_msg)
-                else:
-                    # Несколько файлов — отправляем как альбом
-                    input_media_list = []
-                    for message, file_data, _, _, _ in media_to_send:
-                        input_media = create_input_media(message, file_data)
-                        if input_media:
-                            input_media_list.append(input_media)
-
-                    sent_messages = bot.send_media_group(TARGET_CHAT_ID, input_media_list)
+                # Отправляем через send_media_group независимо от количества файлов
+                sent_messages = bot.send_media_group(TARGET_CHAT_ID, input_media_list)
 
                 # Добавляем отправленные медиа в базу данных
                 for i, (message, file_data, file_id, file_hash, file_size) in enumerate(media_to_send):
@@ -378,6 +356,8 @@ def handle_single_message(message, file_id):
             return
 
         # Если data это BytesIO (файл скачан), проверяем по хешу
+        file_hash = None
+        file_size = None
         if isinstance(data, io.BytesIO):
             file_hash = calculate_file_hash(data)
             file_size = get_file_size(message)
@@ -389,30 +369,17 @@ def handle_single_message(message, file_id):
                     bot.reply_to(message, f"⚠️ Это медиа уже было отправлено ранее (найдено по содержимому, message_id: {existing_message_id})")
                     print(f"Дубликат медиа найден по хешу: {file_hash}, message_id: {existing_message_id}")
                     return
-        else:
-            # data это file_id (файл слишком большой)
-            file_hash = None
-            file_size = None
 
         # Медиа не является дубликатом, отправляем его
         try:
-            sent_message = None
-            if message.photo:
-                sent_message = bot.send_photo(TARGET_CHAT_ID, data)
-            elif message.video:
-                sent_message = bot.send_video(TARGET_CHAT_ID, data)
-            elif message.animation:
-                sent_message = bot.send_animation(TARGET_CHAT_ID, data)
-            elif message.document:
-                original_filename = message.document.file_name if hasattr(message.document, 'file_name') else None
-                sent_message = bot.send_document(TARGET_CHAT_ID, data, visible_file_name=original_filename)
-            elif message.audio:
-                sent_message = bot.send_audio(TARGET_CHAT_ID, data)
+            media_list = []
+            media_list.append(create_input_media(message, data))
+            sent_messages = bot.send_media_group(TARGET_CHAT_ID, media=media_list)
 
-            if sent_message:
+            if sent_messages and len(sent_messages) > 0:
                 # Добавляем в базу данных
-                add_media_to_database(file_id, sent_message.message_id, file_hash, file_size)
-                print(f"Медиа из сообщения {message.message_id} отправлено, новый message_id: {sent_message.message_id}")
+                add_media_to_database(file_id, sent_messages[0].message_id, file_hash, file_size)
+                print(f"Медиа из сообщения {message.message_id} отправлено, новый message_id: {sent_messages[0].message_id}")
         except Exception as e:
             error_msg = f"Ошибка отправки медиа: {str(e)}"
             send_error_notification(message.chat.id, error_msg, message)
